@@ -1,0 +1,11 @@
+[Unit]
+Description=Run BongoStock Certbot renewal checks
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=bongostock-certbot-renew.service
+
+[Install]
+WantedBy=timers.target

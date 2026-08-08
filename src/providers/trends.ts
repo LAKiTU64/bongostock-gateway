@@ -175,11 +175,19 @@ async function fetchTencent(code: string, days: 1 | 5, deadline: number): Promis
         : []).sort((left, right) => left.timestamp.localeCompare(right.timestamp))
   if (!points.length) throw new Error('腾讯行情暂无分时数据')
   const quote = security.qt?.[apiCode]
+  // Tencent has no real average price for indices: its volume/amount cover the
+  // whole market, so amount/(volume*100) yields a per-share market average
+  // (~17 CNY) instead of the index level. Pinning average to close keeps the
+  // chart scale correct; the average line simply overlaps the price line.
+  const isIndex = /^(?:SH000|SZ399)\d{3}$/.test(code)
+  const normalizedPoints = isIndex
+    ? points.map(point => ({ ...point, average: point.close }))
+    : points
   return {
     code,
     name: quote?.[1] || code,
     preClose: finite(quote?.[4]),
-    points,
+    points: normalizedPoints,
     source: 'tencent',
   }
 }

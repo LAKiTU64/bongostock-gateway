@@ -67,6 +67,8 @@ curl -X POST http://127.0.0.1:8787/v1/klines \
 
 推荐 Ubuntu 24.04、systemd、Nginx 和 HTTPS：
 
+从空服务器安装、首次签发 IP HTTPS 证书、自动续期、更新和 Token 轮换的完整步骤见 [`docs/SERVER_DEPLOYMENT.md`](docs/SERVER_DEPLOYMENT.md)。
+
 1. 代码放在 `/opt/bongostock-gateway`；
 2. 由管理员安装依赖和构建；
 3. 运行用户使用无登录权限的 `bongostock`；
@@ -95,24 +97,8 @@ curl -X POST http://127.0.0.1:8787/v1/klines \
 
 本项目代码使用 MIT License。`stock-api` 及上游行情数据源保留各自的许可证和使用条款，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## IP HTTPS and automatic renewal
+## 部署文档
 
-The gateway can be exposed directly on a fixed public IPv4 address without a
-domain name. Let's Encrypt IP certificates must use the `shortlived` profile
-and are valid for about 160 hours (roughly six days), so renewal must be
-fully automated.
-
-For an IP deployment:
-
-1. Keep TCP 80 and 443 open in the cloud firewall; do not expose port 8787.
-2. Install Certbot 5.4 or newer and create `/var/www/certbot`.
-3. Use `deploy/nginx.conf`, replacing `api.example.com` with the public IP.
-4. Request the certificate with `--preferred-profile shortlived
-   --ip-address <PUBLIC_IP> --webroot --webroot-path /var/www/certbot`.
-5. Install `deploy/bongostock-certbot-deploy.sh` as
-   `/usr/local/sbin/bongostock-certbot-deploy`.
-6. Install and enable the matching `.service` and `.timer` units in `deploy/`.
-
-The timer checks four times per day and the deploy hook reloads Nginx only
-after a successful renewal. The client keeps using the same
-`https://<PUBLIC_IP>` URL; it does not need a certificate file or code change.
+- 完整服务端部署：[`docs/SERVER_DEPLOYMENT.md`](docs/SERVER_DEPLOYMENT.md)
+- HTTP API：[`API.md`](API.md)
+- 客户端外接协议：[`bongostock/docs/EXTERNAL_MARKET_API_V1.md`](https://github.com/LAKiTU64/bongostock/blob/main/docs/EXTERNAL_MARKET_API_V1.md)

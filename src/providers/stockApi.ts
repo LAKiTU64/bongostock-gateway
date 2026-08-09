@@ -126,7 +126,7 @@ export class StockApiProvider {
         low: finite(low),
       }
       if (volume !== undefined) result.volume = finite(volume)
-      result.source = 'tencent'
+      result.source = 'fqkline'
       return result
     })
   }

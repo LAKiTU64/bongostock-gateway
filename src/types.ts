@@ -21,7 +21,7 @@ export interface Kline {
   high: number
   low: number
   volume?: number
-  source?: 'tencent' | 'sina' | 'eastmoney'
+  source?: 'tencent' | 'sina' | 'eastmoney' | 'fqkline'
 }
 
 export interface TrendPoint {

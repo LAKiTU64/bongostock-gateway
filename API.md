@@ -22,6 +22,14 @@ Content-Type: application/json
   "search": true,
   "trends": ["intraday", "five-day"],
   "klines": ["day"],
+  "news": {
+    "enabled": true,
+    "provider": "mx-news-search",
+    "scopes": ["market", "briefing", "security"],
+    "sorts": ["default", "newest", "oldest"],
+    "timeRanges": ["1d", "3d", "7d", "all"],
+    "depths": ["compact", "standard", "extended"]
+  },
   "stockApi": {
     "sources": ["auto", "tencent", "sina", "eastmoney"],
     "methods": ["getStock", "getStocks", "searchStocks", "getKlines", "inspectStock"],
@@ -30,6 +38,38 @@ Content-Type: application/json
   }
 }
 ```
+
+未配置 `MX_APIKEY` 时 `news.enabled=false`，其他行情能力不受影响。
+
+### `POST /v1/news/search`
+
+资讯只通过 Gateway 服务端调用东方财富妙想，客户端不直连上游。请求示例：
+
+```json
+{
+  "scope": "market",
+  "preset": "overview",
+  "timeRange": "3d",
+  "sort": "default",
+  "depth": "standard",
+  "types": ["news", "announcement", "report", "external"]
+}
+```
+
+个股资讯增加：
+
+```json
+{
+  "scope": "security",
+  "preset": "latest",
+  "security": { "code": "SZ000858", "name": "五粮液" },
+  "timeRange": "7d",
+  "sort": "newest",
+  "depth": "extended"
+}
+```
+
+也可以传入最长300字符的完整 `query`。服务端负责检索词补全、扩展检索、严格时间过滤、默认/最新/最旧排序、类型过滤、去重和缓存。响应包含 `items`、`outOfRangeItems`、`stats` 和 `meta`。完整约定见 [`docs/NEWS_SEARCH_INTEGRATION.md`](docs/NEWS_SEARCH_INTEGRATION.md)。
 
 ### `POST /v1/quotes`
 
@@ -127,4 +167,6 @@ BongoStock 批量报价接口，固定使用自动数据源：
 | 405 | HTTP 方法不支持 |
 | 413 | 请求正文超过 64 KiB |
 | 429 | 超过每客户端每分钟请求限制 |
+| 501 | 资讯服务未配置 |
 | 502 | 上游行情源不可用或返回无效数据 |
+| 504 | 资讯上游请求超时 |

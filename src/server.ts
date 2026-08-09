@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { URL } from 'node:url'
 
 import type { GatewayConfig } from './config.js'
-import type { MarketProvider } from './types.js'
+import type { MarketProvider, NewsProvider } from './types.js'
 import {
   clientAddress,
   parseCodes,
@@ -14,6 +14,7 @@ import {
   parsePeriod,
   parseSearchQuery,
   parseSource,
+  parseNewsRequest,
   normalizeAshareCode,
   normalizeMarketCode,
   RequestValidationError,
@@ -78,7 +79,7 @@ function requestError(error: unknown) {
   return { statusCode: 502, message: '行情上游暂时不可用' }
 }
 
-export function createGatewayServer(config: GatewayConfig, provider: MarketProvider): Server {
+export function createGatewayServer(config: GatewayConfig, provider: MarketProvider, newsProvider?: NewsProvider): Server {
   const rateWindows = new Map<string, RateWindow>()
 
   const server = createServer(async (request, response) => {
@@ -129,6 +130,18 @@ export function createGatewayServer(config: GatewayConfig, provider: MarketProvi
           search: true,
           trends: ['intraday', 'five-day'],
           klines: ['day'],
+          news: {
+            enabled: newsProvider?.enabled === true,
+            ...(newsProvider?.enabled === true
+              ? {
+                  provider: 'mx-news-search',
+                  scopes: ['market', 'briefing', 'security'],
+                  sorts: ['default', 'newest', 'oldest'],
+                  timeRanges: ['1d', '3d', '7d', 'all'],
+                  depths: ['compact', 'standard', 'extended'],
+                }
+              : {}),
+          },
           stockApi: {
             sources: ['auto', 'tencent', 'sina', 'eastmoney'],
             methods: ['getStock', 'getStocks', 'searchStocks', 'getKlines', 'inspectStock'],
@@ -145,6 +158,16 @@ export function createGatewayServer(config: GatewayConfig, provider: MarketProvi
       }
 
       const body = parseObject(await readJson(request, config.maxBodyBytes))
+
+      if (path === '/v1/news/search') {
+        if (!newsProvider?.enabled) {
+          json(response, 501, { error: '资讯服务未配置' })
+          return
+        }
+        const result = await withinTimeout(newsProvider.search(parseNewsRequest(body)), config.newsTimeoutMs + 2_000)
+        json(response, 200, result)
+        return
+      }
 
       if (path === '/v1/quotes') {
         const rows = await withinTimeout(provider.getStocks(parseCodes(body.codes, config.maxCodes), 'auto'), config.requestTimeoutMs)

@@ -11,6 +11,9 @@ export interface GatewayConfig {
   trendCacheMs: number
   klineCacheMs: number
   searchCacheMs: number
+  mxApiKey: string
+  newsTimeoutMs: number
+  newsCacheMs: number
 }
 
 function integer(value: string | undefined, fallback: number, min: number, max: number) {
@@ -39,5 +42,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     trendCacheMs: 30_000,
     klineCacheMs: 5 * 60_000,
     searchCacheMs: 60 * 60_000,
+    mxApiKey: env.MX_APIKEY?.trim() ?? '',
+    newsTimeoutMs: integer(env.BONGOSTOCK_NEWS_TIMEOUT_MS, 15_000, 2_000, 60_000),
+    newsCacheMs: integer(env.BONGOSTOCK_NEWS_CACHE_MS, 5 * 60_000, 10_000, 60 * 60_000),
   }
 }

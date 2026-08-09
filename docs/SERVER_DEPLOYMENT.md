@@ -13,7 +13,7 @@ BongoStock 客户端
       Nginx ───── HTTP 80（ACME 验证和跳转）
         │ HTTP 127.0.0.1:8787
         ▼
-bongostock-gateway ───── 上游公开行情源
+bongostock-gateway ───── 上游公开行情源 / 可选妙想资讯
 ```
 
 云防火墙只开放：
@@ -81,6 +81,9 @@ BONGOSTOCK_PORT=8787
 BONGOSTOCK_REQUEST_TIMEOUT_MS=8000
 BONGOSTOCK_TRUST_PROXY=true
 BONGOSTOCK_RATE_LIMIT_PER_MINUTE=120
+MX_APIKEY=
+BONGOSTOCK_NEWS_TIMEOUT_MS=15000
+BONGOSTOCK_NEWS_CACHE_MS=300000
 EOF
 unset TOKEN_VALUE
 ```
@@ -92,6 +95,8 @@ sudo sed -n 's/^BONGOSTOCK_TOKEN=//p' /etc/bongostock-gateway.env
 ```
 
 不要把这条命令的输出发到聊天、Issue、日志或截图中。
+
+不使用资讯中心时保持 `MX_APIKEY` 为空。需要资讯时，把妙想页面生成的 Key 填在等号后；服务端代码部署并完成首次冒烟测试后应立即重置测试 Key，再替换此值并重启服务。客户端不保存妙想 Key，也不需要因 Key 轮换而修改代码。
 
 ## 6. 安装并启动 systemd 服务
 
@@ -108,6 +113,17 @@ sudo systemctl status bongostock-gateway --no-pager
 curl --fail http://127.0.0.1:8787/healthz
 TOKEN_VALUE="$(sudo sed -n 's/^BONGOSTOCK_TOKEN=//p' /etc/bongostock-gateway.env)"
 curl --fail -H "Authorization: Bearer ${TOKEN_VALUE}" http://127.0.0.1:8787/v1/capabilities
+unset TOKEN_VALUE
+```
+
+配置资讯后，`capabilities.news.enabled` 应为 `true`。真实检索验证示例：
+
+```bash
+TOKEN_VALUE="$(sudo sed -n 's/^BONGOSTOCK_TOKEN=//p' /etc/bongostock-gateway.env)"
+curl --fail -X POST http://127.0.0.1:8787/v1/news/search \
+  -H "Authorization: Bearer ${TOKEN_VALUE}" \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"market","preset":"overview","timeRange":"1d","sort":"default","depth":"compact"}'
 unset TOKEN_VALUE
 ```
 

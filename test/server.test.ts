@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import type { GatewayConfig } from '../src/config.js'
 import { createGatewayServer } from '../src/server.js'
-import type { KlineAdjust, KlinePeriod, MarketProvider, ProviderSource } from '../src/types.js'
+import type { KlineAdjust, KlinePeriod, MarketProvider, NewsProvider, ProviderSource } from '../src/types.js'
 
 const config: GatewayConfig = {
   host: '127.0.0.1',
@@ -19,6 +19,9 @@ const config: GatewayConfig = {
   trendCacheMs: 30_000,
   klineCacheMs: 300_000,
   searchCacheMs: 3_600_000,
+  mxApiKey: '',
+  newsTimeoutMs: 15_000,
+  newsCacheMs: 300_000,
 }
 
 const provider: MarketProvider = {
@@ -45,8 +48,8 @@ const provider: MarketProvider = {
   },
 }
 
-async function withServer(run: (baseUrl: string) => Promise<void>) {
-  const server = createGatewayServer(config, provider)
+async function withServer(run: (baseUrl: string) => Promise<void>, newsProvider?: NewsProvider) {
+  const server = createGatewayServer(config, provider, newsProvider)
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   const address = server.address()
@@ -74,7 +77,9 @@ test('serves capabilities and validated quotes', async () => {
   await withServer(async baseUrl => {
     const capabilities = await fetch(`${baseUrl}/v1/capabilities`, { headers: auth() })
     assert.equal(capabilities.status, 200)
-    assert.deepEqual((await capabilities.json() as { klines: string[] }).klines, ['day'])
+    const body = await capabilities.json() as { klines: string[], news: { enabled: boolean } }
+    assert.deepEqual(body.klines, ['day'])
+    assert.equal(body.news.enabled, false)
 
     const quotes = await fetch(`${baseUrl}/v1/quotes`, {
       method: 'POST',
@@ -84,6 +89,44 @@ test('serves capabilities and validated quotes', async () => {
     assert.equal(quotes.status, 200)
     assert.equal((await quotes.json() as { quotes: Array<{ name: string }> }).quotes[0]?.name, '上证指数')
   })
+})
+
+test('serves server-only normalized news and rejects it when unconfigured', async () => {
+  await withServer(async baseUrl => {
+    const unavailable = await fetch(`${baseUrl}/v1/news/search`, {
+      method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'market' }),
+    })
+    assert.equal(unavailable.status, 501)
+  })
+
+  const newsProvider: NewsProvider = {
+    enabled: true,
+    async search(request) {
+      assert.equal(request.sort, 'newest')
+      assert.equal(request.timeRange, '3d')
+      return {
+        items: [{ id: 'one', title: '测试资讯', summary: '', publishedAt: '2026-08-09T00:00:00.000Z', source: '测试源', type: 'news' }],
+        outOfRangeItems: [],
+        stats: { upstreamCount: 1, duplicateCount: 0, outOfRangeCount: 0, filteredTypeCount: 0, returnedCount: 1 },
+        meta: { provider: 'mx-news-search', sort: request.sort, timeRange: request.timeRange, depth: request.depth, retrievedAt: '2026-08-09T00:00:00.000Z', cached: false },
+      }
+    },
+  }
+
+  await withServer(async baseUrl => {
+    const capabilities = await fetch(`${baseUrl}/v1/capabilities`, { headers: auth() })
+    assert.equal((await capabilities.json() as { news: { enabled: boolean } }).news.enabled, true)
+
+    const response = await fetch(`${baseUrl}/v1/news/search`, {
+      method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'market', preset: 'overview', timeRange: '3d', sort: 'newest', depth: 'standard' }),
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json() as { items: Array<{ title: string }> }).items[0]?.title, '测试资讯')
+  }, newsProvider)
 })
 
 test('rejects malformed codes and unknown methods', async () => {

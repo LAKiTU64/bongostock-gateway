@@ -1,6 +1,6 @@
 # bongostock-gateway
 
-一个供 BongoStock 使用的轻量行情网关。它不保存账号、不做交易，也不把 Token 写入 Git。服务端内部调用 `stock-api@2.7.3`，并为分时和 5 日补充东方财富→腾讯备用数据源。
+一个供 BongoStock 使用的轻量行情与资讯网关。它不保存账号、不做交易，也不把 Token 或妙想 API Key 写入 Git。服务端内部调用 `stock-api@2.7.3`，为分时和 5 日补充东方财富→腾讯备用数据源，并可选转发东方财富妙想 `news-search`。
 
 ## 当前接口
 
@@ -12,6 +12,7 @@
 - `POST /v1/search`；
 - `POST /v1/trends`；
 - `POST /v1/klines`。
+- `POST /v1/news/search`：可选的服务端资讯检索；需要配置 `MX_APIKEY`。
 
 扩展接口：
 
@@ -35,7 +36,7 @@
 ```bash
 pnpm install
 copy .env.example .env   # PowerShell；macOS/Linux 使用 cp
-# 在 .env 中设置至少 16 位的 BONGOSTOCK_TOKEN
+# 在 .env 中设置至少 16 位的 BONGOSTOCK_TOKEN；资讯功能还需要 MX_APIKEY
 pnpm typecheck
 pnpm test
 pnpm build
@@ -100,5 +101,6 @@ curl -X POST http://127.0.0.1:8787/v1/klines \
 ## 部署文档
 
 - 完整服务端部署：[`docs/SERVER_DEPLOYMENT.md`](docs/SERVER_DEPLOYMENT.md)
+- 妙想资讯服务端集成：[`docs/NEWS_SEARCH_INTEGRATION.md`](docs/NEWS_SEARCH_INTEGRATION.md)
 - HTTP API：[`API.md`](API.md)
 - 客户端外接协议：[`bongostock/docs/EXTERNAL_MARKET_API_V1.md`](https://github.com/LAKiTU64/bongostock/blob/main/docs/EXTERNAL_MARKET_API_V1.md)

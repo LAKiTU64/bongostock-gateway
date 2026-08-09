@@ -1,6 +1,7 @@
 import { TtlCache } from './cache.js'
 import type { GatewayConfig } from './config.js'
-import type { KlineAdjust, KlinePeriod, MarketProvider, ProviderSource } from './types.js'
+import type { KlineAdjust, KlinePeriod, MarketProvider, NewsProvider, ProviderSource } from './types.js'
+import { MxNewsProvider } from './providers/mxNews.js'
 import { StockApiProvider } from './providers/stockApi.js'
 import { TrendProvider } from './providers/trends.js'
 
@@ -37,4 +38,8 @@ export function createProvider(config: GatewayConfig): MarketProvider {
       return rows
     },
   }
+}
+
+export function createNewsProvider(config: GatewayConfig): NewsProvider {
+  return new MxNewsProvider(config.mxApiKey, config.newsTimeoutMs, config.newsCacheMs)
 }

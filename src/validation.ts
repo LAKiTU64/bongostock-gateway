@@ -1,5 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 
+import type { NewsDepth, NewsScope, NewsSearchRequest, NewsSort, NewsTimeRange, NewsType } from './types.js'
+
 export function normalizeMarketCode(value: unknown) {
   const code = String(value ?? '').trim().toUpperCase()
   if (!/^(?:SH|SZ|HK)\d{6}$/.test(code) && !/^US[A-Z0-9._-]{1,16}$/.test(code)) {
@@ -73,6 +75,56 @@ export function parseAdjust(value: unknown) {
   const adjust = value === undefined ? 'none' : String(value).toLowerCase()
   if (adjust === 'none' || adjust === 'qfq' || adjust === 'hfq') return adjust
   throw new RequestValidationError('adjust 只能是 none、qfq 或 hfq')
+}
+
+function oneOf<T extends string>(value: unknown, fallback: T, values: readonly T[], label: string): T {
+  const candidate = value === undefined ? fallback : String(value).toLowerCase()
+  if (values.includes(candidate as T)) return candidate as T
+  throw new RequestValidationError(`${label} 只能是 ${values.join('、')}`)
+}
+
+function optionalText(value: unknown, label: string, maxLength: number) {
+  if (value === undefined || value === null) return undefined
+  const text = String(value).trim()
+  if (!text) return undefined
+  if (text.length > maxLength) throw new RequestValidationError(`${label} 长度不能超过 ${maxLength} 个字符`)
+  return text
+}
+
+export function parseNewsRequest(body: Record<string, unknown>): NewsSearchRequest {
+  const scope = oneOf<NewsScope>(body.scope, 'market', ['market', 'briefing', 'security'], 'scope')
+  const timeRange = oneOf<NewsTimeRange>(body.timeRange, '1d', ['1d', '3d', '7d', 'all'], 'timeRange')
+  const sort = oneOf<NewsSort>(body.sort, 'default', ['default', 'newest', 'oldest'], 'sort')
+  const depth = oneOf<NewsDepth>(body.depth, 'standard', ['compact', 'standard', 'extended'], 'depth')
+  const preset = optionalText(body.preset, 'preset', 32) ?? (scope === 'briefing' ? 'auto' : scope === 'security' ? 'latest' : 'overview')
+  const query = optionalText(body.query, 'query', 300)
+
+  let security: { code: string, name: string } | undefined
+  if (scope === 'security') {
+    const raw = parseObject(body.security)
+    const code = optionalText(raw.code, 'security.code', 24)
+    const name = optionalText(raw.name, 'security.name', 40)
+    if (!code || !name) throw new RequestValidationError('个股资讯必须提供 security.code 和 security.name')
+    security = { code, name }
+  }
+
+  const allowedTypes: readonly NewsType[] = ['news', 'announcement', 'report', 'external']
+  let types: NewsType[] = [...allowedTypes]
+  if (body.types !== undefined) {
+    if (!Array.isArray(body.types) || body.types.length === 0) throw new RequestValidationError('types 必须是非空数组')
+    types = [...new Set(body.types.map(value => oneOf<NewsType>(value, 'news', allowedTypes, 'types')))]
+  }
+
+  return {
+    scope,
+    preset,
+    ...(query ? { query } : {}),
+    ...(security ? { security } : {}),
+    timeRange,
+    sort,
+    depth,
+    types,
+  }
 }
 
 export function clientAddress(request: IncomingMessage, trustProxy: boolean) {

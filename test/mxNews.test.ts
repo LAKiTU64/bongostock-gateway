@@ -58,3 +58,21 @@ test('normalizes, deduplicates, filters, sorts and caches news', async () => {
   assert.equal(calls, 2)
   assert.equal(second.meta.cached, true)
 })
+
+test('deduplicates normalized titles even when URLs and upstream codes differ', async () => {
+  const request: NewsSearchRequest = {
+    ...baseRequest,
+    depth: 'compact',
+    timeRange: 'all',
+  }
+  const fetcher: typeof fetch = async () => upstream([
+    { code: 'first', title: 'Same headline', date: '2026-08-09 12:00:00', jumpUrl: 'https://example.com/first' },
+    { code: 'second', title: ' Same headline!!! ', date: '2026-08-09 12:01:00', jumpUrl: 'https://other.example/second' },
+    { code: 'third', title: 'Different headline', date: '2026-08-09 12:02:00', jumpUrl: 'https://example.com/third' },
+  ])
+  const provider = new MxNewsProvider('test-key', 1_000, 0, fetcher, () => Date.parse('2026-08-09T16:00:00+08:00'))
+  const result = await provider.search(request)
+
+  assert.deepEqual(result.items.map(item => item.title), ['Different headline', 'Same headline'])
+  assert.equal(result.stats.duplicateCount, 1)
+})

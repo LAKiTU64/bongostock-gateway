@@ -30,7 +30,7 @@ interface MxNewsRecord {
 
 interface NormalizedRecord {
   item: NewsItem
-  dedupeKey: string
+  dedupeKeys: string[]
   publishedAtMs?: number
 }
 
@@ -96,7 +96,20 @@ function stableId(value: string) {
 }
 
 function normalizeTitle(value: string) {
-  return value.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '')
+  return value.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '')
+}
+
+function normalizeUrl(value: string) {
+  try {
+    const url = new URL(value)
+    url.hash = ''
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|spm$|from$|source$)/i.test(key)) url.searchParams.delete(key)
+    }
+    return url.toString()
+  } catch {
+    return value
+  }
 }
 
 function normalizeRecord(record: MxNewsRecord): NormalizedRecord | undefined {
@@ -106,8 +119,13 @@ function normalizeRecord(record: MxNewsRecord): NormalizedRecord | undefined {
   const upstreamCode = text(record.code)
   const rawPublishedAt = text(record.publishDate) || text(record.date)
   const publishedAtMs = parseShanghaiTime(rawPublishedAt)
-  const dedupeKey = url || upstreamCode || normalizeTitle(title)
-  const idSeed = `${dedupeKey}|${rawPublishedAt}`
+  const normalizedTitle = normalizeTitle(title)
+  const dedupeKeys = [
+    `title:${normalizedTitle}`,
+    ...(url ? [`url:${normalizeUrl(url)}`] : []),
+    ...(upstreamCode ? [`upstream:${upstreamCode}`] : []),
+  ]
+  const idSeed = `${dedupeKeys[0]}|${rawPublishedAt}`
   const item: NewsItem = {
     id: stableId(idSeed),
     title,
@@ -119,7 +137,7 @@ function normalizeRecord(record: MxNewsRecord): NormalizedRecord | undefined {
   }
   return {
     item,
-    dedupeKey: dedupeKey || normalizeTitle(title),
+    dedupeKeys,
     ...(publishedAtMs !== undefined ? { publishedAtMs } : {}),
   }
 }
@@ -272,11 +290,11 @@ export class MxNewsProvider implements NewsProvider {
     const unique: NormalizedRecord[] = []
     let duplicateCount = 0
     for (const record of combined) {
-      if (seen.has(record.dedupeKey)) {
+      if (record.dedupeKeys.some(key => seen.has(key))) {
         duplicateCount += 1
         continue
       }
-      seen.add(record.dedupeKey)
+      record.dedupeKeys.forEach(key => seen.add(key))
       unique.push(record)
     }
 

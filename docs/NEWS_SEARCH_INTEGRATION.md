@@ -131,7 +131,7 @@ BONGOSTOCK_NEWS_CACHE_MS=300000
     {
       "id": "stable-local-id",
       "title": "新闻标题",
-      "summary": "简短摘要",
+      "summary": "上游返回的完整内容（仅清理 HTML 标签和多余空白，不截断）",
       "publishedAt": "2026-08-09T07:36:00.000Z",
       "source": "财联社",
       "type": "news",
@@ -166,6 +166,7 @@ BONGOSTOCK_NEWS_CACHE_MS=300000
 - 单次查询保持妙想原始次序。
 - 扩展查询采用 A1、B1、A2、B2……交替合并。
 - 合并过程中按稳定 ID、原文链接和标准化标题去重。
+- Gateway 不按展示尺寸截断标题、来源或正文；紧凑展示属于客户端职责。
 
 ### 最新
 

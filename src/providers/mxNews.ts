@@ -44,13 +44,11 @@ function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function compactText(value: unknown, maxLength: number) {
-  const normalized = text(value)
+function cleanText(value: unknown) {
+  return text(value)
     .replace(/<[^>]*>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  if (normalized.length <= maxLength) return normalized
-  return `${normalized.slice(0, maxLength).trimEnd()}…`
 }
 
 function safeUrl(value: unknown) {
@@ -113,7 +111,7 @@ function normalizeUrl(value: string) {
 }
 
 function normalizeRecord(record: MxNewsRecord): NormalizedRecord | undefined {
-  const title = compactText(record.title, 180)
+  const title = cleanText(record.title)
   if (!title) return undefined
   const url = safeUrl(record.jumpUrl)
   const upstreamCode = text(record.code)
@@ -129,9 +127,9 @@ function normalizeRecord(record: MxNewsRecord): NormalizedRecord | undefined {
   const item: NewsItem = {
     id: stableId(idSeed),
     title,
-    summary: compactText(record.content || record.trunk, 220),
+    summary: cleanText(record.content || record.trunk),
     ...(publishedAtMs !== undefined ? { publishedAt: new Date(publishedAtMs).toISOString() } : {}),
-    source: compactText(record.source || record.insName, 60) || '来源暂不可用',
+    source: cleanText(record.source || record.insName) || '来源暂不可用',
     type: newsType(record.informationType),
     ...(url ? { url } : {}),
   }

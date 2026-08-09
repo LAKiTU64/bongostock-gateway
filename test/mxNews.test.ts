@@ -30,6 +30,7 @@ test('builds two distinct time-aware queries for extended mode', () => {
 
 test('normalizes, deduplicates, filters, sorts and caches news', async () => {
   let calls = 0
+  const completeContent = `完整内容${'很长但不应被网关截断'.repeat(40)}`
   const fetcher: typeof fetch = async () => {
     calls += 1
     if (calls === 1) {
@@ -41,7 +42,7 @@ test('normalizes, deduplicates, filters, sorts and caches news', async () => {
     }
     return upstream([
       { code: 'duplicate-2', title: '重复新闻副本', date: '2026-08-08 12:00:00', informationType: 'NOTICE', jumpUrl: 'https://example.com/shared' },
-      { code: 'b', title: '最新研报', date: '2026-08-09 15:00:00', informationType: 'REPORT', insName: '机构乙' },
+      { code: 'b', title: '最新研报', content: `<p>${completeContent}</p>`, date: '2026-08-09 15:00:00', informationType: 'REPORT', insName: '机构乙' },
     ])
   }
   const provider = new MxNewsProvider('test-key', 1_000, 300_000, fetcher, () => Date.parse('2026-08-09T16:00:00+08:00'))
@@ -52,6 +53,7 @@ test('normalizes, deduplicates, filters, sorts and caches news', async () => {
   assert.equal(first.stats.outOfRangeCount, 1)
   assert.equal(first.outOfRangeItems[0]?.title, '超期新闻')
   assert.equal(first.items[1]?.summary, '摘要')
+  assert.equal(first.items[0]?.summary, completeContent)
   assert.equal(first.meta.cached, false)
 
   const second = await provider.search(baseRequest)

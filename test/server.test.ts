@@ -13,7 +13,7 @@ const config: GatewayConfig = {
   requestTimeoutMs: 2_000,
   trustProxy: false,
   maxBodyBytes: 64 * 1024,
-  maxCodes: 50,
+  maxCodes: 300,
   rateLimitPerMinute: 20,
   quoteCacheMs: 5_000,
   trendCacheMs: 30_000,

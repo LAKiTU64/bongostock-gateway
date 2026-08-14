@@ -19,6 +19,8 @@ import {
   normalizeMarketCode,
   RequestValidationError,
 } from './validation.js'
+import { WatchlistError, type WatchlistStore } from './watchlist.js'
+import { renderWatchlistPage } from './web.js'
 
 interface RateWindow { startedAt: number, count: number }
 
@@ -73,13 +75,29 @@ async function withinTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise
 
 function requestError(error: unknown) {
   if (error instanceof RequestValidationError) return { statusCode: error.statusCode, message: error.message }
+  if (error instanceof WatchlistError) return { statusCode: error.statusCode, message: error.message }
   if (error && typeof error === 'object' && 'statusCode' in error && typeof error.statusCode === 'number') {
     return { statusCode: error.statusCode, message: error instanceof Error ? error.message : '请求失败' }
   }
+  // Log unexpected failures so 502s are diagnosable without exposing request bodies.
+  process.stderr.write(`gateway: unexpected error: ${error instanceof Error ? error.message : String(error)}\n`)
   return { statusCode: 502, message: '行情上游暂时不可用' }
 }
 
-export function createGatewayServer(config: GatewayConfig, provider: MarketProvider, newsProvider?: NewsProvider): Server {
+function html(response: ServerResponse, body: string) {
+  response.statusCode = 200
+  response.setHeader('Content-Type', 'text/html; charset=utf-8')
+  response.setHeader('Cache-Control', 'no-store')
+  response.setHeader('X-Content-Type-Options', 'nosniff')
+  response.end(body)
+}
+
+export function createGatewayServer(
+  config: GatewayConfig,
+  provider: MarketProvider,
+  newsProvider?: NewsProvider,
+  watchlist?: WatchlistStore,
+): Server {
   const rateWindows = new Map<string, RateWindow>()
 
   const server = createServer(async (request, response) => {
@@ -97,6 +115,11 @@ export function createGatewayServer(config: GatewayConfig, provider: MarketProvi
     try {
       if (path === '/healthz' && method === 'GET') {
         json(response, 200, { ok: true })
+        return
+      }
+
+      if (path === '/watchlist' && method === 'GET') {
+        html(response, renderWatchlistPage())
         return
       }
 
@@ -148,7 +171,38 @@ export function createGatewayServer(config: GatewayConfig, provider: MarketProvi
             periods: ['day', 'week', 'month'],
             adjusts: ['none', 'qfq', 'hfq'],
           },
+          watchlist: watchlist !== undefined,
         })
+        return
+      }
+
+      if (path === '/v1/watchlist' && method === 'GET') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.getState())
+        return
+      }
+
+      const deleteGroup = /^\/v1\/watchlist\/groups\/([^/]+)$/.exec(path)
+      const deleteCode = /^\/v1\/watchlist\/groups\/([^/]+)\/codes\/([^/]+)$/.exec(path)
+
+      if (deleteCode && method === 'DELETE') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.removeCode(decodeURIComponent(deleteCode[1]!), decodeURIComponent(deleteCode[2]!)))
+        return
+      }
+
+      if (deleteGroup && method === 'DELETE') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.removeGroup(decodeURIComponent(deleteGroup[1]!)))
         return
       }
 
@@ -158,6 +212,34 @@ export function createGatewayServer(config: GatewayConfig, provider: MarketProvi
       }
 
       const body = parseObject(await readJson(request, config.maxBodyBytes))
+
+      if (path === '/v1/watchlist/replace') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.replaceGroups(body.groups))
+        return
+      }
+
+      if (path === '/v1/watchlist/groups' && body) {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.addGroup(String(body.name ?? '')))
+        return
+      }
+
+      const addCode = /^\/v1\/watchlist\/groups\/([^/]+)\/codes$/.exec(path)
+      if (addCode) {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, await watchlist.addCode(decodeURIComponent(addCode[1]!), String(body.code ?? '')))
+        return
+      }
 
       if (path === '/v1/news/search') {
         if (!newsProvider?.enabled) {

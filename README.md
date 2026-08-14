@@ -22,6 +22,15 @@
 - `source` 可选 `auto`、`tencent`、`sina`、`eastmoney`；
 - K 线支持 `day`、`week`、`month` 及 `none`、`qfq`、`hfq` 复权参数。
 
+自选管理：
+
+- `GET /v1/watchlist`：读取全部分组与名称映射；
+- `POST /v1/watchlist/replace`：整表覆盖（客户端全量同步用）；
+- `POST /v1/watchlist/groups`、`DELETE /v1/watchlist/groups/{id}`：增删分组；
+- `POST /v1/watchlist/groups/{id}/codes`、`DELETE /v1/watchlist/groups/{id}/codes/{code}`：增删股票；
+- 数据存于 `BONGOSTOCK_WATCHLIST_FILE`（默认 `/var/lib/bongostock-gateway/watchlist.json`），结构与桌面客户端一致，添加股票时服务端自动解析证券名称；
+- `GET /watchlist`：无鉴权的自选管理页面，浏览器输入与客户端相同的 Bearer Token 即可增删查。
+
 `/v1/quotes`、`/v1/search`、`/v1/klines` 和 `/v1/trends` 保持 BongoStock 客户端现有调用方式不变。客户端是否使用扩展接口由客户端自行决定。
 
 `/v1/` 请求需要 `Authorization: Bearer <token>`。证券代码位于 POST JSON 正文中；服务日志只记录方法、路径、状态码和耗时，不记录正文或 Token。
@@ -89,6 +98,7 @@ curl -X POST http://127.0.0.1:8787/v1/klines \
 - 请求正文最大 64 KiB；
 - 默认每个客户端每分钟最多 120 个请求；
 - 报价缓存约 5 秒，趋势缓存约 30 秒，日 K 缓存约 5 分钟；
+- 自选最多 8 个分组、去重后最多 300 只证券，分组名最长 20 字符；
 - HTTP 会暴露请求正文，跨设备部署应使用 HTTPS；
 - HTTPS 可以保护传输内容，但服务器和上游行情源仍能看到请求的证券代码；
 - 上游行情接口的准确性、稳定性和使用许可由使用者自行确认；

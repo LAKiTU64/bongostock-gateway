@@ -4,6 +4,7 @@ import type { KlineAdjust, KlinePeriod, MarketProvider, NewsProvider, ProviderSo
 import { MxNewsProvider } from './providers/mxNews.js'
 import { StockApiProvider } from './providers/stockApi.js'
 import { TrendProvider } from './providers/trends.js'
+import { WatchlistStore } from './watchlist.js'
 
 export function createProvider(config: GatewayConfig): MarketProvider {
   const stockApi = new StockApiProvider()
@@ -42,4 +43,16 @@ export function createProvider(config: GatewayConfig): MarketProvider {
 
 export function createNewsProvider(config: GatewayConfig): NewsProvider {
   return new MxNewsProvider(config.mxApiKey, config.newsTimeoutMs, config.newsCacheMs)
+}
+
+export function createWatchlistStore(config: GatewayConfig): WatchlistStore {
+  const stockApi = new StockApiProvider()
+  return new WatchlistStore(config.watchlistFile, async (code) => {
+    try {
+      const quote = await stockApi.getStock(code, 'auto')
+      return quote.name && quote.name !== '---' ? quote.name : undefined
+    } catch {
+      return undefined
+    }
+  })
 }

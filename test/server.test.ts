@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import type { GatewayConfig } from '../src/config.js'
@@ -22,6 +24,7 @@ const config: GatewayConfig = {
   mxApiKey: '',
   newsTimeoutMs: 15_000,
   newsCacheMs: 300_000,
+  watchlistFile: join(tmpdir(), 'bongostock-watchlist-test.json'),
 }
 
 const provider: MarketProvider = {

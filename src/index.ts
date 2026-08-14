@@ -1,9 +1,14 @@
 import { loadConfig } from './config.js'
-import { createNewsProvider, createProvider } from './provider.js'
+import { createNewsProvider, createProvider, createWatchlistStore } from './provider.js'
 import { createGatewayServer } from './server.js'
 
 const config = loadConfig()
-const server = createGatewayServer(config, createProvider(config), createNewsProvider(config))
+const server = createGatewayServer(
+  config,
+  createProvider(config),
+  createNewsProvider(config),
+  createWatchlistStore(config),
+)
 
 server.listen(config.port, config.host, () => {
   process.stdout.write(`BongoStock gateway listening on http://${config.host}:${config.port}\n`)

@@ -59,11 +59,21 @@ export function renderWatchlistPage(): string {
   .stock-list { list-style: none; }
   .stock-list li {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 6px;
+    padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 4px;
   }
+  .stock-list li[draggable="true"] { cursor: grab; }
+  .stock-list li.dragging { opacity: 0.4; border-style: dashed; }
+  .stock-list li.drag-over { border-color: var(--accent); background: var(--accent-soft); }
   .stock-code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px; }
   .stock-name { color: var(--muted); font-size: 13px; }
+  .row-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  .row-actions button { padding: 2px 7px; font-size: 12px; }
+  .group-card { cursor: default; }
+  .group-card[draggable="true"] { cursor: grab; }
+  .group-card.dragging { opacity: 0.4; border-style: dashed; }
+  .group-card.drag-over { border-color: var(--accent); }
   .empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+  .hint-drag { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .add-stock { margin-top: 10px; }
   .candidates { margin-top: 8px; }
   .candidate {
@@ -101,6 +111,7 @@ export function renderWatchlistPage(): string {
       <button id="addGroup" class="ghost">新建分组</button>
       <button id="refresh" class="ghost" style="margin-left:auto">刷新</button>
     </div>
+    <p class="hint-drag">拖动分组或股票可以调整顺序；顺序会同步到桌面客户端。</p>
     <div id="groups"></div>
   </div>
 </div>
@@ -161,8 +172,14 @@ export function renderWatchlistPage(): string {
     var html = ''
     for (var i = 0; i < groups.length; i++) {
       var group = groups[i]
-      html += '<div class="card"><div class="group-head"><div><span class="group-name">' + esc(group.name) + '</span><span class="count">' + group.codes.length + ' 只</span></div>'
-      html += '<button class="danger small" data-action="del-group" data-id="' + esc(group.id) + '">删除分组</button></div>'
+      var first = i === 0
+      var last = i === groups.length - 1
+      html += '<div class="card group-card" draggable="true" data-action="group-row" data-id="' + esc(group.id) + '" data-index="' + i + '">'
+      html += '<div class="group-head"><div><span class="group-name">' + esc(group.name) + '</span><span class="count">' + group.codes.length + ' 只</span></div>'
+      html += '<div class="row-actions">'
+      html += '<button class="ghost small" data-action="move-group" data-id="' + esc(group.id) + '" data-dir="-1"' + (first ? ' disabled' : '') + '>↑</button>'
+      html += '<button class="ghost small" data-action="move-group" data-id="' + esc(group.id) + '" data-dir="1"' + (last ? ' disabled' : '') + '>↓</button>'
+      html += '<button class="danger small" data-action="del-group" data-id="' + esc(group.id) + '">删除分组</button></div></div>'
       html += '<ul class="stock-list">'
       if (group.codes.length === 0) {
         html += '<li class="empty">暂无股票</li>'
@@ -170,9 +187,15 @@ export function renderWatchlistPage(): string {
         for (var j = 0; j < group.codes.length; j++) {
           var code = group.codes[j]
           var name = names[code]
-          html += '<li><div><span class="stock-code">' + esc(code) + '</span>'
+          var codeFirst = j === 0
+          var codeLast = j === group.codes.length - 1
+          html += '<li draggable="true" data-action="code-row" data-id="' + esc(group.id) + '" data-code="' + esc(code) + '" data-index="' + j + '"><div><span class="stock-code">' + esc(code) + '</span>'
           if (name) html += ' <span class="stock-name">' + esc(name) + '</span>'
-          html += '</div><button class="danger small" data-action="del-code" data-id="' + esc(group.id) + '" data-code="' + esc(code) + '">删除</button></li>'
+          html += '</div><div class="row-actions">'
+          html += '<button class="ghost small" data-action="move-code" data-id="' + esc(group.id) + '" data-code="' + esc(code) + '" data-dir="-1"' + (codeFirst ? ' disabled' : '') + '>↑</button>'
+          html += '<button class="ghost small" data-action="move-code" data-id="' + esc(group.id) + '" data-code="' + esc(code) + '" data-dir="1"' + (codeLast ? ' disabled' : '') + '>↓</button>'
+          html += '<button class="danger small" data-action="del-code" data-id="' + esc(group.id) + '" data-code="' + esc(code) + '">删除</button>'
+          html += '</div></li>'
         }
       }
       html += '</ul>'
@@ -186,12 +209,103 @@ export function renderWatchlistPage(): string {
       html = '<div class="card empty">还没有分组，先在上方新建一个。</div>'
     }
     groupsEl.innerHTML = html
+    bindDragDrop()
   }
 
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
     })
+  }
+
+  var dragFrom = null
+
+  function bindDragDrop() {
+    var rows = groupsEl.querySelectorAll('[data-action="group-row"], [data-action="code-row"]')
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].addEventListener('dragstart', function (event) {
+        dragFrom = {
+          groupId: this.getAttribute('data-id'),
+          code: this.getAttribute('data-code'),
+        }
+        this.classList.add('dragging')
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', dragFrom.code || dragFrom.groupId)
+      })
+      rows[i].addEventListener('dragend', function () {
+        this.classList.remove('dragging')
+        var targets = groupsEl.querySelectorAll('.drag-over')
+        for (var j = 0; j < targets.length; j++) targets[j].classList.remove('drag-over')
+        dragFrom = null
+      })
+      rows[i].addEventListener('dragover', function (event) {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        this.classList.add('drag-over')
+      })
+      rows[i].addEventListener('dragleave', function () {
+        this.classList.remove('drag-over')
+      })
+      rows[i].addEventListener('drop', function (event) {
+        event.preventDefault()
+        this.classList.remove('drag-over')
+        if (!dragFrom) return
+        var targetGroupId = this.getAttribute('data-id')
+        var targetCode = this.getAttribute('data-code')
+        // 股票拖拽：仅允许在同一个分组内重排；分组拖拽：整组重排。
+        if (dragFrom.code) {
+          if (dragFrom.code === targetCode || dragFrom.groupId !== targetGroupId) return
+          var group = state.data.groups.find(function (g) { return g.id === dragFrom.groupId })
+          if (!group) return
+          var from = group.codes.indexOf(dragFrom.code)
+          var to = group.codes.indexOf(targetCode)
+          if (from < 0 || to < 0) return
+          group.codes.splice(from, 1)
+          group.codes.splice(to, 0, dragFrom.code)
+        } else {
+          if (dragFrom.groupId === targetGroupId) return
+          var groups = state.data.groups
+          var fromGroup = groups.findIndex(function (g) { return g.id === dragFrom.groupId })
+          var toGroup = groups.findIndex(function (g) { return g.id === targetGroupId })
+          if (fromGroup < 0 || toGroup < 0) return
+          var moved = groups.splice(fromGroup, 1)[0]
+          groups.splice(toGroup, 0, moved)
+        }
+        persistOrder()
+      })
+    }
+  }
+
+  function findGroup(groupId) {
+    return (state.data.groups || []).find(function (g) { return g.id === groupId })
+  }
+
+  function moveGroup(groupId, direction) {
+    var groups = state.data.groups
+    var index = groups.findIndex(function (g) { return g.id === groupId })
+    var target = index + direction
+    if (index < 0 || target < 0 || target >= groups.length) return
+    var moved = groups.splice(index, 1)[0]
+    groups.splice(target, 0, moved)
+    persistOrder()
+  }
+
+  function moveCode(groupId, code, direction) {
+    var group = findGroup(groupId)
+    if (!group) return
+    var index = group.codes.indexOf(code)
+    var target = index + direction
+    if (index < 0 || target < 0 || target >= group.codes.length) return
+    group.codes.splice(index, 1)
+    group.codes.splice(target, 0, code)
+    persistOrder()
+  }
+
+  function persistOrder() {
+    render()
+    api('POST', '/v1/watchlist/replace', { groups: state.data.groups })
+      .then(function () { setMsg('顺序已保存', true) })
+      .catch(function (error) { setMsg('保存顺序失败：' + error.message, false) })
   }
 
   function inputFor(element) {
@@ -296,6 +410,14 @@ export function renderWatchlistPage(): string {
         await api('DELETE', '/v1/watchlist/groups/' + encodeURIComponent(id))
       } else if (action === 'del-code') {
         await api('DELETE', '/v1/watchlist/groups/' + encodeURIComponent(id) + '/codes/' + encodeURIComponent(code))
+      } else if (action === 'move-group') {
+        var groupDirection = Number(button.getAttribute('data-dir') || 0)
+        moveGroup(id, groupDirection)
+        return
+      } else if (action === 'move-code') {
+        var codeDirection = Number(button.getAttribute('data-dir') || 0)
+        moveCode(id, code, codeDirection)
+        return
       } else if (action === 'search-code') {
         var input = inputFor(button)
         await searchCode(id, input ? input.value : '')

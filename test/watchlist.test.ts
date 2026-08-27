@@ -25,16 +25,21 @@ async function withStore(run: (store: WatchlistStore, dir: string) => Promise<vo
 test('starts empty and persists to disk', async () => {
   await withStore(async (store, dir) => {
     const empty = await store.getState()
-    assert.deepEqual(empty, { version: 1, groups: [], names: {} })
+    assert.equal(empty.version, 1)
+    assert.equal(empty.updatedAt, 0)
+    assert.deepEqual(empty.groups, [])
+    assert.deepEqual(empty.names, {})
 
     const afterAdd = await store.addGroup('自选股')
     assert.equal(afterAdd.groups.length, 1)
     assert.equal(afterAdd.groups[0]?.name, '自选股')
+    assert.ok(afterAdd.updatedAt > 0)
 
     const reloaded = new WatchlistStore(join(dir, 'watchlist.json'), async () => undefined)
     const state = await reloaded.getState()
     assert.equal(state.groups.length, 1)
     assert.equal(state.groups[0]?.codes.length, 0)
+    assert.equal(state.updatedAt, afterAdd.updatedAt)
   })
 })
 
@@ -179,5 +184,108 @@ test('replace enforces the size limit of 300 deduplicated codes', async () => {
     assert.equal(state.groups[0]?.codes.length, MAX_WATCHLIST_SIZE)
     // 300 只以内可以再加一只；满额后再加被拒绝。
     await assert.rejects(() => store.addCode('big', 'SH610000'), /最多保存 300/)
+  })
+})
+
+test('updatedAt advances on every write and loads from disk', async () => {
+  await withStore(async (store, dir) => {
+    const first = await store.addGroup('自选股')
+    await new Promise(resolve => setTimeout(resolve, 2))
+    const second = await store.addCode(first.groups[0]!.id, 'SH600036')
+
+    assert.ok(second.updatedAt > first.updatedAt)
+
+    const reloaded = new WatchlistStore(join(dir, 'watchlist.json'), async () => undefined)
+    const state = await reloaded.getState()
+    assert.equal(state.updatedAt, second.updatedAt)
+  })
+})
+
+test('replace accepts a matching baseUpdatedAt and rejects a stale one with 409', async () => {
+  await withStore(async (store) => {
+    const baseline = await store.addGroup('自选股')
+    const baseUpdatedAt = baseline.updatedAt
+
+    // 相同的 baseUpdatedAt 允许覆盖。
+    const accepted = await store.replaceGroups([{ id: 'a', name: 'A', codes: ['SH600036'] }], baseUpdatedAt)
+    assert.equal(accepted.groups[0]?.name, 'A')
+
+    // 过期 baseUpdatedAt（已被上面那次写操作推进）被拒绝。
+    await assert.rejects(
+      () => store.replaceGroups([{ id: 'b', name: 'B', codes: [] }], baseUpdatedAt),
+      (error) => error instanceof Error && error.message.includes('云端已有更新') && 'statusCode' in error && error.statusCode === 409,
+    )
+  })
+})
+
+test('replace allows overwriting an empty cloud state regardless of baseUpdatedAt', async () => {
+  await withStore(async (store) => {
+    // 云端为空（从未写入或刚清空）时，任意 baseUpdatedAt 都可覆盖，
+    // 保证"本地有数据、云端还没同步过"的首次迁移不被 409 卡住。
+    const state = await store.replaceGroups([{ id: 'seed', name: '迁移数据', codes: ['SH600036'] }], 0)
+    assert.equal(state.groups[0]?.name, '迁移数据')
+    assert.ok(state.updatedAt > 0)
+  })
+})
+
+test('legacy file without updatedAt loads as zero', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bongostock-watchlist-legacy-'))
+  const { writeFile } = await import('node:fs/promises')
+  await writeFile(join(dir, 'watchlist.json'), JSON.stringify({ version: 1, groups: [], names: {} }), 'utf8')
+  const store = new WatchlistStore(join(dir, 'watchlist.json'), async () => undefined)
+  const state = await store.getState()
+  assert.equal(state.updatedAt, 0)
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('records a snapshot after every write and caps at 10', async () => {
+  await withStore(async (store) => {
+    const state = await store.addGroup('自选股')
+    for (let index = 0; index < 12; index += 1) {
+      await store.addCode(state.groups[0]!.id, `SH${String(600000 + index)}`)
+    }
+    const backups = await store.listBackups()
+    assert.equal(backups.length, 10)
+    // 最新的快照在最前（含 12 次 addCode 的完整结果）。
+    assert.equal(backups[0]?.groups[0]?.codes.length, 12)
+    assert.equal(backups.at(-1)?.groups[0]?.codes.length, 3)
+    assert.ok(backups[0]!.savedAt >= backups.at(-1)!.savedAt)
+  })
+})
+
+test('restore rolls back to a snapshot and advances updatedAt', async () => {
+  await withStore(async (store) => {
+    const first = await store.addGroup('自选股')
+    await store.addCode(first.groups[0]!.id, 'SH600036')
+    const second = await store.addGroup('第二组')
+
+    const target = (await store.listBackups()).find(snapshot => snapshot.groups.length === 1 && snapshot.groups[0]!.name === '自选股')
+    assert.ok(target)
+
+    const restored = await store.restore(target!.updatedAt)
+    assert.equal(restored.groups.length, 1)
+    assert.equal(restored.groups[0]?.codes[0], 'SH600036')
+    // 回滚本身也是一次写操作，updatedAt 继续前进（让客户端能拉取到回滚结果）。
+    assert.ok(restored.updatedAt > second.updatedAt)
+  })
+})
+
+test('restore rejects an unknown snapshot with 404', async () => {
+  await withStore(async (store) => {
+    await store.addGroup('自选股')
+    await assert.rejects(
+      () => store.restore(123456),
+      (error) => error instanceof Error && 'statusCode' in error && error.statusCode === 404,
+    )
+  })
+})
+
+test('backup file survives reload', async () => {
+  await withStore(async (store, dir) => {
+    await store.addGroup('自选股')
+    const reloaded = new WatchlistStore(join(dir, 'watchlist.json'), async () => undefined)
+    const backups = await reloaded.listBackups()
+    assert.equal(backups.length, 1)
+    assert.equal(backups[0]?.groups[0]?.name, '自选股')
   })
 })

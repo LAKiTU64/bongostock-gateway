@@ -10,9 +10,30 @@ export interface WatchlistGroup {
 
 export interface WatchlistState {
   version: 1
+  /** Server-side timestamp (ms) of the last write, set in mutate(). */
+  updatedAt: number
   groups: WatchlistGroup[]
   names: Record<string, string>
 }
+
+/**
+ * A point-in-time snapshot of the whole watchlist, kept for rollback.
+ * Semantics are like save-game slots: after every successful write a snapshot
+ * of the NEW state is appended (newest first), and `restore(updatedAt)` rolls
+ * the current state back to a chosen snapshot. Restoring is itself a write,
+ * so it advances `updatedAt` and existing clients pick the rollback up via
+ * their normal pull.
+ */
+export interface WatchlistSnapshot {
+  /** When the snapshot itself was recorded (Date.now(), ms). */
+  savedAt: number
+  /** The `updatedAt` value the snapshot was taken from. Used to select it. */
+  updatedAt: number
+  groups: WatchlistGroup[]
+  names: Record<string, string>
+}
+
+export const MAX_WATCHLIST_SNAPSHOTS = 10
 
 export const MAX_WATCHLIST_GROUPS = 8
 export const MAX_WATCHLIST_SIZE = 300
@@ -41,7 +62,7 @@ function randomId() {
 }
 
 function emptyState(): WatchlistState {
-  return { version: 1, groups: [], names: {} }
+  return { version: 1, updatedAt: 0, groups: [], names: {} }
 }
 
 function sanitizeGroups(values: readonly unknown[]): WatchlistGroup[] {
@@ -81,6 +102,9 @@ function sanitizeState(value: unknown): WatchlistState {
 
   const raw = value as Record<string, unknown>
   state.groups = sanitizeGroups(Array.isArray(raw.groups) ? raw.groups : [])
+  if (typeof raw.updatedAt === 'number' && Number.isFinite(raw.updatedAt) && raw.updatedAt > 0) {
+    state.updatedAt = raw.updatedAt
+  }
 
   const rawNames = raw.names && typeof raw.names === 'object' && !Array.isArray(raw.names)
     ? raw.names as Record<string, unknown>
@@ -102,6 +126,7 @@ export class WatchlistError extends Error {
 
 export class WatchlistStore {
   private state = emptyState()
+  private snapshots: WatchlistSnapshot[] = []
   private loaded = false
   private writeQueue: Promise<void> = Promise.resolve()
 
@@ -109,6 +134,13 @@ export class WatchlistStore {
     private readonly filePath: string,
     private readonly resolveName: (code: string) => Promise<string | undefined>,
   ) {}
+
+  /** Companion file holding rollback snapshots, e.g. watchlist.backup.json. */
+  private backupFilePath() {
+    return this.filePath.endsWith('.json')
+      ? `${this.filePath.slice(0, -5)}.backup.json`
+      : `${this.filePath}.backup.json`
+  }
 
   async load() {
     if (this.loaded) return
@@ -124,6 +156,28 @@ export class WatchlistStore {
       this.state = emptyState()
     }
 
+    try {
+      const text = await readFile(this.backupFilePath(), 'utf8')
+      const raw = JSON.parse(text) as { snapshots?: unknown }
+      if (Array.isArray(raw.snapshots)) {
+        this.snapshots = raw.snapshots
+          .filter((entry): entry is WatchlistSnapshot => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+            const snapshot = entry as Record<string, unknown>
+            return typeof snapshot.savedAt === 'number'
+              && typeof snapshot.updatedAt === 'number'
+              && Array.isArray(snapshot.groups)
+          })
+          .slice(0, MAX_WATCHLIST_SNAPSHOTS)
+      }
+    } catch (error) {
+      // Missing or corrupt backup is fine: only rollback history is lost.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        process.stderr.write(`watchlist: 备份快照无法读取: ${error instanceof Error ? error.message : String(error)}\n`)
+      }
+      this.snapshots = []
+    }
+
     this.loaded = true
   }
 
@@ -132,18 +186,45 @@ export class WatchlistStore {
     return structuredClone(this.state)
   }
 
+  async listBackups(): Promise<WatchlistSnapshot[]> {
+    await this.load()
+    return structuredClone(this.snapshots)
+  }
+
   private async persist() {
     await mkdir(dirname(this.filePath), { recursive: true })
     const tmpPath = `${this.filePath}.tmp`
     const body = JSON.stringify(this.state, null, 2)
     await writeFile(tmpPath, body, { encoding: 'utf8', mode: 0o600 })
     await rename(tmpPath, this.filePath)
+
+    // Rollback snapshot: record the NEW state (newest first), cap at 10.
+    // This must not fail the primary write — wrap in its own try/catch.
+    const snapshot: WatchlistSnapshot = {
+      savedAt: Date.now(),
+      updatedAt: this.state.updatedAt,
+      groups: structuredClone(this.state.groups),
+      names: structuredClone(this.state.names),
+    }
+    try {
+      const snapshots = [snapshot, ...this.snapshots].slice(0, MAX_WATCHLIST_SNAPSHOTS)
+      const backupPath = this.backupFilePath()
+      const backupTmp = `${backupPath}.tmp`
+      await writeFile(backupTmp, JSON.stringify({ version: 1, snapshots }, null, 2), { encoding: 'utf8', mode: 0o600 })
+      await rename(backupTmp, backupPath)
+      this.snapshots = snapshots
+    } catch (error) {
+      process.stderr.write(`watchlist: 备份快照写入失败（不影响主数据）: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
   }
 
   private async mutate(change: (state: WatchlistState) => void) {
     await this.load()
     const before = structuredClone(this.state)
     change(this.state)
+    // Strictly monotonic: Date.now() alone can repeat within the same
+    // millisecond, which would break clients' `since` change detection.
+    this.state.updatedAt = Math.max(Date.now(), this.state.updatedAt + 1)
     const snapshot = structuredClone(this.state)
     try {
       // Serialize writes so concurrent requests never interleave temp files.
@@ -215,10 +296,19 @@ export class WatchlistStore {
    * Replace the whole watchlist with the given groups (full overwrite for
    * client-side sync). Unknown names are resolved on demand; names for codes
    * that no longer exist are dropped.
+   *
+   * When `baseUpdatedAt` is provided it acts as an optimistic lock: if the
+   * state changed after that timestamp, the write is rejected with 409 so the
+   * caller can re-pull instead of silently overwriting newer cloud data.
    */
-  async replaceGroups(rawGroups: unknown) {
+  async replaceGroups(rawGroups: unknown, baseUpdatedAt?: number) {
     await this.load()
     if (!Array.isArray(rawGroups)) throw new WatchlistError('groups 必须是数组')
+    // 空状态可被任意覆盖（没有有效数据会丢失）；仅当云端已有数据时校验乐观锁。
+    const hasExistingData = this.state.groups.length > 0 || Object.keys(this.state.names).length > 0
+    if (hasExistingData && typeof baseUpdatedAt === 'number' && Number.isFinite(baseUpdatedAt) && this.state.updatedAt > baseUpdatedAt) {
+      throw new WatchlistError('云端已有更新，请刷新后重试', 409)
+    }
 
     const groups = sanitizeGroups(rawGroups)
     const keptCodes = new Set(groups.flatMap(group => group.codes))
@@ -250,6 +340,32 @@ export class WatchlistStore {
       const group = state.groups.find(item => item.id === groupId)
       if (!group) return
       group.codes = group.codes.filter(item => item !== code)
+    })
+  }
+
+  /**
+   * Roll the whole watchlist back to a recorded snapshot (save-game restore).
+   * The target snapshot is selected by its `updatedAt`. Restoring is itself a
+   * write, so the state's `updatedAt` advances afterwards — clients that pull
+   * with `since` will detect the change and re-sync to the restored data.
+   * Throws WatchlistError(404) when no snapshot matches.
+   */
+  async restore(updatedAt: number) {
+    await this.load()
+    const target = this.snapshots.find(snapshot => snapshot.updatedAt === updatedAt)
+    if (!target) throw new WatchlistError('找不到对应的存档点', 404)
+
+    const groups = sanitizeGroups(target.groups)
+    const names: Record<string, string> = {}
+    for (const [code, name] of Object.entries(target.names)) {
+      if (isValidCode(code) && typeof name === 'string' && name.trim()) {
+        names[normalizeCode(code)] = name.trim().slice(0, 40)
+      }
+    }
+
+    return this.mutate(state => {
+      state.groups = groups
+      state.names = names
     })
   }
 }

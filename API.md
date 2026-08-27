@@ -149,7 +149,41 @@ BongoStock 批量报价接口，固定使用自动数据源：
 
 ## 自选分组与自选股
 
-数据保存在 `BONGOSTOCK_WATCHLIST_FILE` 指定的 JSON 文件（默认 `/var/lib/bongostock-gateway/watchlist.json`，权限 600）。结构仿照桌面客户端：`{ version, groups: [{ id, name, codes[] }], names: { code: 名称 } }`。`names` 由服务端在添加股票时通过上游行情源自动解析，客户端无需自己维护名称。
+数据保存在 `BONGOSTOCK_WATCHLIST_FILE` 指定的 JSON 文件（默认 `/var/lib/bongostock-gateway/watchlist.json`，权限 600）。结构仿照桌面客户端：`{ version, updatedAt, groups: [{ id, name, codes[] }], names: { code: 名称 } }`。`updatedAt` 为最近一次写入的服务器时间戳（毫秒，严格单调递增）；`names` 由服务端在添加股票时通过上游行情源自动解析，客户端无需自己维护名称。
+
+### 备份与回滚（存档机制）
+
+每次写入（增删分组/股票、replace 同步、restore 回滚）成功后，服务端都会把**新状态**存为一份快照，最多保留最近 10 份，写入伴生文件 `watchlist.backup.json`（与主文件同目录）。语义类似游戏存档：
+
+- 快照记录的是**每次写入完成后的完整状态**（`groups + names + updatedAt`），新的在前；
+- `restore` 把当前状态整体恢复到某个快照；
+- 回滚本身也是一次写入，会生成新快照并推进 `updatedAt`——客户端凭 `since` 增量检查会自动拉到回滚后的数据，无需额外通知；
+- 快照写入失败只记日志，不影响主数据（主文件永远是权威）。
+
+排查回滚相关问题时，可直接调用这两个接口，或用 curl 读取/修改 `watchlist.backup.json` 观察快照内容。
+
+### `GET /v1/watchlist/backups`
+
+列出全部历史快照（最多 10 份，新的在前）：
+
+```json
+{
+  "snapshots": [
+    { "savedAt": 1755648000000, "updatedAt": 1755647990000, "groups": [...], "names": {...} },
+    { "savedAt": 1755647900000, "updatedAt": 1755647890000, "groups": [...], "names": {...} }
+  ]
+}
+```
+
+### `POST /v1/watchlist/restore`
+
+将自选数据整体回滚到指定快照。请求体携带目标快照的 `updatedAt`（取自 `/v1/watchlist/backups`）：
+
+```json
+{ "updatedAt": 1755647990000 }
+```
+
+响应为回滚后的完整状态（`updatedAt` 已推进）。快照不存在返回 `404`。
 
 ### `GET /v1/watchlist`
 
@@ -158,10 +192,13 @@ BongoStock 批量报价接口，固定使用自动数据源：
 ```json
 {
   "version": 1,
+  "updatedAt": 1755648000000,
   "groups": [{ "id": "ab12cd34", "name": "自选股", "codes": ["SH600036", "SZ000858"] }],
   "names": { "SH600036": "招商银行" }
 }
 ```
+
+可带 `?since=<timestamp>` 做增量检查：当数据未变化时返回极小的 `{"unchanged": true, "updatedAt": ...}`，客户端据此跳过重复拉取。
 
 ### `POST /v1/watchlist/replace`
 
@@ -172,6 +209,8 @@ BongoStock 批量报价接口，固定使用自动数据源：
   "groups": [{ "id": "ab12cd34", "name": "自选股", "codes": ["SH600036"] }]
 }
 ```
+
+可选 `baseUpdatedAt` 字段实现乐观锁：携带客户端上次同步的 `updatedAt`，若云端在此期间已被其他终端修改，返回 `409` 与最新状态，调用方应重新拉取后再合并，避免静默覆盖更新的云端数据。
 
 ### `POST /v1/watchlist/groups`
 
@@ -207,9 +246,9 @@ BongoStock 批量报价接口，固定使用自动数据源：
 
 | 状态 | 含义 |
 | --- | --- |
-| 400 | JSON、代码、周期或参数无效（含自选分组/股票校验失败） |
+| 400 | JSON、代码、周期或参数无效（含自选分组/股票校验失败、restore 缺少有效 updatedAt） |
 | 401 | Bearer Token 缺失或错误 |
-| 404 | 路径不存在或自选分组不存在 |
+| 404 | 路径不存在、自选分组不存在或 restore 快照不存在 |
 | 405 | HTTP 方法不支持 |
 | 413 | 请求正文超过 64 KiB |
 | 429 | 超过每客户端每分钟请求限制 |

@@ -181,7 +181,22 @@ export function createGatewayServer(
           json(response, 501, { error: '自选服务未启用' })
           return
         }
-        json(response, 200, await watchlist.getState())
+        const state = await watchlist.getState()
+        const since = Number(url.searchParams.get('since'))
+        if (Number.isFinite(since) && since > 0 && state.updatedAt <= since) {
+          json(response, 200, { unchanged: true, updatedAt: state.updatedAt })
+          return
+        }
+        json(response, 200, state)
+        return
+      }
+
+      if (path === '/v1/watchlist/backups' && method === 'GET') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        json(response, 200, { snapshots: await watchlist.listBackups() })
         return
       }
 
@@ -213,12 +228,37 @@ export function createGatewayServer(
 
       const body = parseObject(await readJson(request, config.maxBodyBytes))
 
+      if (path === '/v1/watchlist/restore') {
+        if (!watchlist) {
+          json(response, 501, { error: '自选服务未启用' })
+          return
+        }
+        const updatedAt = Number(body.updatedAt)
+        if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+          json(response, 400, { error: '缺少有效的 updatedAt' })
+          return
+        }
+        json(response, 200, await watchlist.restore(updatedAt))
+        return
+      }
+
       if (path === '/v1/watchlist/replace') {
         if (!watchlist) {
           json(response, 501, { error: '自选服务未启用' })
           return
         }
-        json(response, 200, await watchlist.replaceGroups(body.groups))
+        const baseUpdatedAt = typeof body.baseUpdatedAt === 'number' && Number.isFinite(body.baseUpdatedAt)
+          ? body.baseUpdatedAt
+          : undefined
+        try {
+          json(response, 200, await watchlist.replaceGroups(body.groups, baseUpdatedAt))
+        } catch (error) {
+          if (error instanceof WatchlistError && error.statusCode === 409) {
+            json(response, 409, { error: error.message, ...await watchlist.getState() })
+            return
+          }
+          throw error
+        }
         return
       }
 

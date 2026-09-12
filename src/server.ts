@@ -292,7 +292,7 @@ export function createGatewayServer(
       }
 
       if (path === '/v1/quotes') {
-        const rows = await withinTimeout(provider.getStocks(parseCodes(body.codes, config.maxCodes), 'auto'), config.requestTimeoutMs)
+        const rows = await withinTimeout(provider.getStocks(parseCodes(body.codes, config.maxCodes), parseSource(body.source)), config.requestTimeoutMs)
         json(response, 200, { quotes: rows })
         return
       }

@@ -60,7 +60,7 @@ export function parseCount(value: unknown) {
 }
 
 export function parseSource(value: unknown) {
-  const source = value === undefined ? 'auto' : String(value).toLowerCase()
+  const source = value === undefined ? 'tencent' : String(value).toLowerCase()
   if (source === 'auto' || source === 'tencent' || source === 'sina' || source === 'eastmoney') return source
   throw new RequestValidationError('source 只能是 auto、tencent、sina 或 eastmoney')
 }
